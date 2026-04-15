@@ -1,4 +1,21 @@
-- name: Build Full Package in CentOS7
+name: bundle-lazynvim-full
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build Full Package in CentOS7
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work_dir" \
@@ -7,23 +24,16 @@
             /bin/bash -c '
               set -euo pipefail
               
-              # 1. Fix CentOS 7 Repos (Vault)
+              # 1. Fix CentOS 7 Repos
               rm -f /etc/yum.repos.d/*.repo
               printf "[base]\nname=CentOS-7 Base\nbaseurl=http://vault.centos.org/7.9.2009/os/x86_64/\nenabled=1\ngpgcheck=0\n" > /etc/yum.repos.d/CentOS-Base.repo
               yum install -y curl tar gzip gcc gcc-c++ make git findutils
               
-              # 2. Download Specific Neovim v0.11.7
-              # Using the specific version from the releases repository
+              # 2. Download Neovim v0.11.7 (Inside Container)
               curl -LO https://github.com/neovim/neovim-releases/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz
               tar xzf nvim-linux-x86_64.tar.gz
-              
-              # Add nvim v0.11.7 to PATH
-              # The directory inside the tar is usually nvim-linux-x86_64
               export PATH="/work_dir/nvim-linux-x86_64/bin:$PATH"
               
-              # Verify version
-              nvim --version
-
               # 3. Setup Neovim Environment
               export HOME=/root
               export XDG_CONFIG_HOME=$HOME/.config
@@ -31,25 +41,28 @@
               export XDG_STATE_HOME=$HOME/.local/state
               
               mkdir -p $XDG_CONFIG_HOME
-              # Map current repo (config) to the container config path
               cp -r /work_dir/. $XDG_CONFIG_HOME/nvim
               
-              # Cleanup build artifacts from the config directory before bundling
+              # Clean artifacts from config folder
               rm -rf $XDG_CONFIG_HOME/nvim/nvim-linux-x86_64*
               rm -rf $XDG_CONFIG_HOME/nvim/dist
 
-              # 4. Sync Plugins via Lazy.nvim
-              # This fetches all plugins into the local share directory
+              # 4. Sync Plugins & Tree-sitter
+              # Using the C7 compiled nvim to sync ensures library compatibility
               nvim --headless "+Lazy! sync" +qa
-
-              # 5. Compile Tree-sitter Parsers
-              # Compiles .so files using CentOS 7 GCC (GLIBC 2.17 compatibility)
               nvim --headless "+TSUpdateSync" +qa
 
-              # 6. Create the Bundle
+              # 5. Create Bundle
               mkdir -p /work_dir/dist
               cd $HOME
               tar -czf /work_dir/dist/lazynvim-centos7-bundle.tar.gz .config/nvim .local/share/nvim .local/state/nvim
-              
-              echo "Bundle for Neovim v0.11.7 completed."
             '
+
+      - name: Create and upload Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name || format('manual-bundle-{0}', github.run_number) }}
+        run: |
+          gh release create "${TAG}" --title "LazyVim Bundle (${TAG})" --notes "CentOS 7 + Neovim v0.11.7" || true
+          gh release upload "${TAG}" dist/lazynvim-centos7-bundle.tar.gz --clobber
