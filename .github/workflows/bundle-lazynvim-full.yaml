@@ -1,21 +1,4 @@
-name: bundle-lazynvim-full
-on:
-  workflow_dispatch:
-  push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: write
-
-jobs:
-  bundle:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Build Full Package in CentOS7
+- name: Build Full Package in CentOS7
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work_dir" \
@@ -24,59 +7,49 @@ jobs:
             /bin/bash -c '
               set -euo pipefail
               
-              # 1. 修复 CentOS 7 镜像源 (EOL 状态需使用 Vault)
+              # 1. Fix CentOS 7 Repos (Vault)
               rm -f /etc/yum.repos.d/*.repo
               printf "[base]\nname=CentOS-7 Base\nbaseurl=http://vault.centos.org/7.9.2009/os/x86_64/\nenabled=1\ngpgcheck=0\n" > /etc/yum.repos.d/CentOS-Base.repo
               yum install -y curl tar gzip gcc gcc-c++ make git findutils
               
-              # 2. 下载 Neovim 0.11.x 二进制 (使用你指定的 releases 地址)
-              # 注意：nightly 版本的路径可能会随时间变化，请根据需要调整 tag
+              # 2. Download Specific Neovim v0.11.7
+              # Using the specific version from the releases repository
               curl -LO https://github.com/neovim/neovim-releases/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz
-              tar xzf nvim-linux64.tar.gz
-              export PATH="/work_dir/nvim-linux64/bin:$PATH"
+              tar xzf nvim-linux-x86_64.tar.gz
+              
+              # Add nvim v0.11.7 to PATH
+              # The directory inside the tar is usually nvim-linux-x86_64
+              export PATH="/work_dir/nvim-linux-x86_64/bin:$PATH"
+              
+              # Verify version
+              nvim --version
 
-              # 3. 准备 Neovim 环境路径
+              # 3. Setup Neovim Environment
               export HOME=/root
               export XDG_CONFIG_HOME=$HOME/.config
               export XDG_DATA_HOME=$HOME/.local/share
               export XDG_STATE_HOME=$HOME/.local/state
               
               mkdir -p $XDG_CONFIG_HOME
-              # 将当前仓库的所有文件（配置）复制到 nvim 配置目录
+              # Map current repo (config) to the container config path
               cp -r /work_dir/. $XDG_CONFIG_HOME/nvim
-              # 移除不需要打包进配置的二进制和构建临时文件
-              rm -rf $XDG_CONFIG_HOME/nvim/nvim-linux64* $XDG_CONFIG_HOME/nvim/dist
+              
+              # Cleanup build artifacts from the config directory before bundling
+              rm -rf $XDG_CONFIG_HOME/nvim/nvim-linux-x86_64*
+              rm -rf $XDG_CONFIG_HOME/nvim/dist
 
-              # 4. 自动化同步插件
-              # --headless 模式下运行 Lazy sync。
-              # 这里的成功取决于你的配置是否能在无交互模式下运行
+              # 4. Sync Plugins via Lazy.nvim
+              # This fetches all plugins into the local share directory
               nvim --headless "+Lazy! sync" +qa
 
-              # 5. 编译 Tree-sitter Parsers
-              # 在 CentOS 7 容器内编译可确保生成的 .so 文件兼容 GLIBC 2.17
-              # 建议在你的配置文件里预设好 ensure_installed，或者在这里手动指定
+              # 5. Compile Tree-sitter Parsers
+              # Compiles .so files using CentOS 7 GCC (GLIBC 2.17 compatibility)
               nvim --headless "+TSUpdateSync" +qa
 
-              # 6. 打包构建产物
+              # 6. Create the Bundle
               mkdir -p /work_dir/dist
               cd $HOME
-              # 打包：配置(config)、插件源码与编译后的二进制(share)、状态(state)
               tar -czf /work_dir/dist/lazynvim-centos7-bundle.tar.gz .config/nvim .local/share/nvim .local/state/nvim
-              echo "Bundle build completed successfully."
+              
+              echo "Bundle for Neovim v0.11.7 completed."
             '
-
-      - name: Create and upload Release
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name || format('manual-bundle-{0}', github.run_number) }}
-        run: |
-          gh release create "${TAG}" \
-            --title "LazyVim Full Bundle (${TAG})" \
-            --notes "Includes config, plugins, and CentOS 7 compiled Tree-sitter parsers. Built with Neovim 0.11.7" \
-            --repo "${{ github.repository }}" || true
-          
-          gh release upload "${TAG}" \
-            --clobber \
-            --repo "${{ github.repository }}" \
-            dist/lazynvim-centos7-bundle.tar.gz
