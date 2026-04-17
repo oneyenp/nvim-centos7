@@ -13,7 +13,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 在 CentOS 7 容器内构建全量包
+      # 2. 在 CentOS 7 容器内构建
       - name: Build Full Package in CentOS7
         run: |
           docker run --rm \
@@ -23,8 +23,7 @@ jobs:
             /bin/bash -lc '
               set -euo pipefail
 
-              # --- 修复 YUM 源 (解决 CentOS 7 EOL 导致的无法安装软件问题) ---
-              # 直接写入 Vault 归档源，避免通过 curl 下载可能导致的 HTML 报错
+              # --- 1. 修复 YUM 源 ---
               rm -f /etc/yum.repos.d/*.repo
               printf "%s\n" \
                 "[base]" \
@@ -47,17 +46,22 @@ jobs:
               yum clean all
               yum makecache
 
-              # --- 安装构建环境依赖 ---
-              yum install -y curl tar gzip xz unzip gcc gcc-c++ make git findutils which
+              # --- 2. 安装基础依赖 ---
+              yum install -y curl tar gzip xz unzip gcc gcc-c++ make findutils which
 
-              # --- 下载并准备 Neovim 二进制 ---
+              # --- 3. 关键：升级 Git ---
+              # CentOS 7 默认 Git 1.8 不支持 --filter 选项，需通过 Endpoint 仓库安装 Git 2.x
+              yum install -y https://packages.endpointdev.com/endpoint-rpmsign-7L-1.el7.noarch.rpm
+              yum install -y git
+
+              # --- 4. 下载 Neovim 二进制 ---
               if [ ! -d "nvim-linux-x86_64" ]; then
                 curl -LO https://github.com/neovim/neovim-releases/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz
                 tar xzf nvim-linux-x86_64.tar.gz
               fi
               export PATH="/work_dir/nvim-linux-x86_64/bin:$PATH"
 
-              # --- 环境路径配置 (XDG 规范) ---
+              # --- 5. 环境目录准备 ---
               export HOME=/root
               export XDG_CONFIG_HOME="$HOME/.config"
               export XDG_DATA_HOME="$HOME/.local/share"
@@ -70,13 +74,12 @@ jobs:
               rm -rf "$XDG_CONFIG_HOME/nvim/nvim-linux-x86_64"*
               rm -rf "$XDG_CONFIG_HOME/nvim/dist"
 
-              # --- 执行插件安装与 Tree-sitter 编译 ---
-              # NVIM_LAZY_NO_FILTER 确保不会因为环境检查跳过某些步骤
+              # --- 6. 执行插件安装与 Tree-sitter 编译 ---
               export NVIM_LAZY_NO_FILTER=1
               nvim --headless "+Lazy! sync" +qa
               nvim --headless "+TSUpdateSync" +qa
 
-              # --- 打包产物 ---
+              # --- 7. 打包产物 ---
               mkdir -p /work_dir/dist
               cd "$HOME"
               tar -czf /work_dir/dist/lazynvim-centos7-bundle.tar.gz \
@@ -87,7 +90,7 @@ jobs:
               echo "Build completed successfully."
             '
 
-      # 3. 将打包好的文件上传，以便在 GitHub 界面下载
+      # 3. 将打包好的文件上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
