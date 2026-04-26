@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag (optional)"
+        description: "Release tag, e.g. v0.11.7-bundle"
         required: false
         default: ""
 
@@ -23,14 +23,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Full Package in CentOS7
+      - name: Generate CentOS7 build script
         run: |
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}:/work_dir" \
-            -w /work_dir \
-            centos:7 \
-            /bin/bash -s <<'CENTOS_SCRIPT'
+          mkdir -p scripts
+
+          cat > scripts/build-centos7.sh <<'SCRIPT'
+          #!/usr/bin/env bash
           set -euo pipefail
+
+          echo "==== Running inside CentOS7 container ===="
+          uname -a
+          cat /etc/centos-release || true
 
           echo "==== Fix CentOS7 YUM repo ===="
           rm -f /etc/yum.repos.d/*.repo
@@ -66,7 +69,7 @@ jobs:
             openssl-devel curl-devel expat-devel zlib-devel perl-devel \
             perl-ExtUtils-MakeMaker
 
-          echo "==== Build Git 2.x (no gettext) ===="
+          echo "==== Build Git 2.x without gettext ===="
           cd /tmp
           curl -L -o git.tar.gz https://www.kernel.org/pub/software/scm/git/git-2.44.0.tar.gz
           tar xzf git.tar.gz
@@ -102,6 +105,7 @@ jobs:
             --exclude ".git" \
             --exclude ".github" \
             --exclude "dist" \
+            --exclude "scripts/build-centos7.sh" \
             --exclude "nvim-linux-x86_64*" \
             --exclude "*.tar.gz"
 
@@ -115,19 +119,20 @@ jobs:
           nvim --headless "+TSUpdateSync" +qa || true
 
           echo "==== Package bundle ===="
-          mkdir -p /work_dir/dist/lazynvim-centos7-bundle
+          OUT=/work_dir/dist
+          PKG="$OUT/lazynvim-centos7-bundle"
 
-          # nvim binary
-          rsync -a /opt/nvim-linux-x86_64 /work_dir/dist/lazynvim-centos7-bundle/
+          rm -rf "$OUT"
+          mkdir -p "$PKG"
 
-          # runtime env
-          mkdir -p /work_dir/dist/lazynvim-centos7-bundle/root
-          rsync -a "$HOME/.config" /work_dir/dist/lazynvim-centos7-bundle/root/
-          rsync -a "$HOME/.local"  /work_dir/dist/lazynvim-centos7-bundle/root/
-          rsync -a "$HOME/.cache"  /work_dir/dist/lazynvim-centos7-bundle/root/ || true
+          rsync -a /opt/nvim-linux-x86_64 "$PKG/"
 
-          # launcher
-          cat > /work_dir/dist/lazynvim-centos7-bundle/run-nvim.sh <<'EOF'
+          mkdir -p "$PKG/root"
+          rsync -a "$HOME/.config" "$PKG/root/"
+          rsync -a "$HOME/.local"  "$PKG/root/"
+          rsync -a "$HOME/.cache"  "$PKG/root/" || true
+
+          cat > "$PKG/run-nvim.sh" <<'EOF'
           #!/usr/bin/env bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -141,14 +146,38 @@ jobs:
           exec nvim "$@"
           EOF
 
-          chmod +x /work_dir/dist/lazynvim-centos7-bundle/run-nvim.sh
+          chmod +x "$PKG/run-nvim.sh"
 
-          cd /work_dir/dist
+          cd "$OUT"
           tar -czf lazynvim-centos7-bundle.tar.gz lazynvim-centos7-bundle
 
-          ls -lh /work_dir/dist/
+          echo "==== DIST CONTENT ===="
+          ls -lah "$OUT"
+
+          test -f "$OUT/lazynvim-centos7-bundle.tar.gz"
+
           echo "Build completed successfully."
-          CENTOS_SCRIPT
+          SCRIPT
+
+          chmod +x scripts/build-centos7.sh
+
+      - name: Build Full Package in CentOS7
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work_dir" \
+            -w /work_dir \
+            centos:7 \
+            /bin/bash /work_dir/scripts/build-centos7.sh
+
+      - name: Check dist
+        run: |
+          echo "==== Workspace ===="
+          ls -lah
+
+          echo "==== Dist ===="
+          ls -lah dist
+
+          test -f dist/lazynvim-centos7-bundle.tar.gz
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -159,6 +188,7 @@ jobs:
 
       - name: Resolve Release Tag
         id: tag
+        shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF_NAME}"
@@ -167,7 +197,9 @@ jobs:
           else
             TAG="manual-${GITHUB_RUN_NUMBER}"
           fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
 
       - name: Upload Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
