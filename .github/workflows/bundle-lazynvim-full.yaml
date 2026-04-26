@@ -6,6 +6,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (optional)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -24,12 +29,13 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/work_dir" \
             -w /work_dir \
             centos:7 \
-            /bin/bash -lc '
-              set -euo pipefail
+            /bin/bash -s <<'CENTOS_SCRIPT'
+          set -euo pipefail
 
-              echo "==== Fix CentOS7 YUM repo ===="
-              rm -f /etc/yum.repos.d/*.repo
-              cat > /etc/yum.repos.d/CentOS-Vault.repo <<EOF
+          echo "==== Fix CentOS7 YUM repo ===="
+          rm -f /etc/yum.repos.d/*.repo
+
+          cat > /etc/yum.repos.d/CentOS-Vault.repo <<'EOF'
           [base]
           name=CentOS-7.9.2009 - Base
           baseurl=http://vault.centos.org/7.9.2009/os/x86_64/
@@ -49,78 +55,100 @@ jobs:
           gpgcheck=0
           EOF
 
-              yum clean all
-              yum makecache fast
+          yum clean all
+          yum makecache fast
 
-              echo "==== Install base deps ===="
-              yum install -y \
-                curl tar gzip xz unzip rsync ca-certificates \
-                gcc gcc-c++ make findutils which \
-                glibc libstdc++ ncurses-libs \
-                openssl-devel curl-devel expat-devel zlib-devel perl-devel \
-                perl-ExtUtils-MakeMaker
+          echo "==== Install base deps ===="
+          yum install -y \
+            curl tar gzip xz unzip rsync ca-certificates \
+            gcc gcc-c++ make findutils which \
+            glibc libstdc++ ncurses-libs \
+            openssl-devel curl-devel expat-devel zlib-devel perl-devel \
+            perl-ExtUtils-MakeMaker
 
-              echo "==== Build Git 2.x from official release tarball ===="
-              cd /tmp
-              curl -L -o git.tar.gz https://www.kernel.org/pub/software/scm/git/git-2.44.0.tar.gz
-              tar xzf git.tar.gz
-              cd git-2.44.0
+          echo "==== Build Git 2.x (no gettext) ===="
+          cd /tmp
+          curl -L -o git.tar.gz https://www.kernel.org/pub/software/scm/git/git-2.44.0.tar.gz
+          tar xzf git.tar.gz
+          cd git-2.44.0
 
-              ./configure --prefix=/usr/local
-              make -j"$(nproc)" all
-              make install
+          ./configure --prefix=/usr/local --without-gettext
+          make -j"$(nproc)" all
+          make install
 
-              export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-              git --version
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          git --version
 
-              echo "==== Install Neovim ===="
-              cd /tmp
-              curl -L -o nvim.tar.gz \
-                https://github.com/neovim/neovim-releases/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz
+          echo "==== Install Neovim ===="
+          cd /tmp
+          curl -L -o nvim.tar.gz \
+            https://github.com/neovim/neovim-releases/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz
 
-              tar xzf nvim.tar.gz -C /opt
-              export PATH="/opt/nvim-linux-x86_64/bin:$PATH"
-              nvim --version
+          tar xzf nvim.tar.gz -C /opt
+          export PATH="/opt/nvim-linux-x86_64/bin:$PATH"
+          nvim --version
 
-              echo "==== Setup XDG env ===="
-              export HOME=/root
-              export XDG_CONFIG_HOME="$HOME/.config"
-              export XDG_DATA_HOME="$HOME/.local/share"
-              export XDG_STATE_HOME="$HOME/.local/state"
-              export XDG_CACHE_HOME="$HOME/.cache"
+          echo "==== Setup XDG env ===="
+          export HOME=/root
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          export XDG_STATE_HOME="$HOME/.local/state"
+          export XDG_CACHE_HOME="$HOME/.cache"
 
-              mkdir -p "$XDG_CONFIG_HOME/nvim"
+          mkdir -p "$XDG_CONFIG_HOME/nvim"
 
-              echo "==== Copy Neovim config ===="
-              rsync -a /work_dir/ "$XDG_CONFIG_HOME/nvim/" \
-                --exclude ".git" \
-                --exclude ".github" \
-                --exclude "dist" \
-                --exclude "nvim-linux-x86_64*" \
-                --exclude "*.tar.gz"
+          echo "==== Copy Neovim config ===="
+          rsync -a /work_dir/ "$XDG_CONFIG_HOME/nvim/" \
+            --exclude ".git" \
+            --exclude ".github" \
+            --exclude "dist" \
+            --exclude "nvim-linux-x86_64*" \
+            --exclude "*.tar.gz"
 
-              echo "==== Install Lazy plugins ===="
-              export NVIM_LAZY_NO_FILTER=1
-              git config --global protocol.version 2
+          echo "==== Install Lazy plugins ===="
+          export NVIM_LAZY_NO_FILTER=1
+          git config --global protocol.version 2
 
-              nvim --headless "+Lazy! sync" +qa
+          nvim --headless "+Lazy! sync" +qa
 
-              echo "==== Build Tree-sitter parsers ===="
-              nvim --headless "+TSUpdateSync" +qa || true
+          echo "==== Build Tree-sitter parsers ===="
+          nvim --headless "+TSUpdateSync" +qa || true
 
-              echo "==== Package bundle ===="
-              mkdir -p /work_dir/dist
-              cd "$HOME"
+          echo "==== Package bundle ===="
+          mkdir -p /work_dir/dist/lazynvim-centos7-bundle
 
-              tar -czf /work_dir/dist/lazynvim-centos7-bundle.tar.gz \
-                .config/nvim \
-                .local/share/nvim \
-                .local/state/nvim \
-                .cache/nvim
+          # nvim binary
+          rsync -a /opt/nvim-linux-x86_64 /work_dir/dist/lazynvim-centos7-bundle/
 
-              ls -lh /work_dir/dist/
-              echo "Build completed successfully."
-            '
+          # runtime env
+          mkdir -p /work_dir/dist/lazynvim-centos7-bundle/root
+          rsync -a "$HOME/.config" /work_dir/dist/lazynvim-centos7-bundle/root/
+          rsync -a "$HOME/.local"  /work_dir/dist/lazynvim-centos7-bundle/root/
+          rsync -a "$HOME/.cache"  /work_dir/dist/lazynvim-centos7-bundle/root/ || true
+
+          # launcher
+          cat > /work_dir/dist/lazynvim-centos7-bundle/run-nvim.sh <<'EOF'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          export PATH="$DIR/nvim-linux-x86_64/bin:$PATH"
+          export HOME="$DIR/root"
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          export XDG_STATE_HOME="$HOME/.local/state"
+          export XDG_CACHE_HOME="$HOME/.cache"
+
+          exec nvim "$@"
+          EOF
+
+          chmod +x /work_dir/dist/lazynvim-centos7-bundle/run-nvim.sh
+
+          cd /work_dir/dist
+          tar -czf lazynvim-centos7-bundle.tar.gz lazynvim-centos7-bundle
+
+          ls -lh /work_dir/dist/
+          echo "Build completed successfully."
+          CENTOS_SCRIPT
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -129,17 +157,30 @@ jobs:
           path: dist/lazynvim-centos7-bundle.tar.gz
           retention-days: 5
 
-      - name: Upload Release Asset
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Resolve Release Tag
+        id: tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Upload Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
+          gh release create "$TAG" \
+            --title "$TAG" \
             --notes "LazyNvim CentOS7 bundle" \
-            --repo "${GITHUB_REPOSITORY}" || true
+            --repo "$GITHUB_REPOSITORY" || true
 
-          gh release upload "${GITHUB_REF_NAME}" \
+          gh release upload "$TAG" \
             dist/lazynvim-centos7-bundle.tar.gz \
             --clobber \
-            --repo "${GITHUB_REPOSITORY}"
+            --repo "$GITHUB_REPOSITORY"
