@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, e.g. v0.11.7-bundle"
+        description: "Release tag (optional)"
         required: false
         default: ""
 
@@ -23,19 +23,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate CentOS7 build script
+      - name: Generate build script
         run: |
           mkdir -p scripts
 
-          cat > scripts/build-centos7.sh <<'SCRIPT'
+          cat > scripts/build.sh <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
 
-          echo "==== Running inside CentOS7 container ===="
+          echo "==== ENV ===="
           uname -a
           cat /etc/centos-release || true
 
-          echo "==== Fix CentOS7 YUM repo ===="
+          echo "==== Fix YUM ===="
           rm -f /etc/yum.repos.d/*.repo
 
           cat > /etc/yum.repos.d/CentOS-Vault.repo <<'EOF'
@@ -61,23 +61,24 @@ jobs:
           yum clean all
           yum makecache fast
 
-          echo "==== Install base deps ===="
+          echo "==== Install deps ===="
           yum install -y \
             curl tar gzip xz unzip rsync ca-certificates \
             gcc gcc-c++ make findutils which \
             glibc libstdc++ ncurses-libs \
             openssl-devel curl-devel expat-devel zlib-devel perl-devel \
-            perl-ExtUtils-MakeMaker
+            perl-ExtUtils-MakeMaker \
+            gettext gettext-devel
 
-          echo "==== Build Git 2.x without gettext ===="
+          echo "==== Build Git ===="
           cd /tmp
           curl -L -o git.tar.gz https://www.kernel.org/pub/software/scm/git/git-2.44.0.tar.gz
           tar xzf git.tar.gz
           cd git-2.44.0
 
-          ./configure --prefix=/usr/local --without-gettext
-          make -j"$(nproc)" all
-          make install
+          ./configure --prefix=/usr/local
+          make -j"$(nproc)" NO_GETTEXT=YesPlease all
+          make NO_GETTEXT=YesPlease install
 
           export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           git --version
@@ -91,7 +92,7 @@ jobs:
           export PATH="/opt/nvim-linux-x86_64/bin:$PATH"
           nvim --version
 
-          echo "==== Setup XDG env ===="
+          echo "==== Setup XDG ===="
           export HOME=/root
           export XDG_CONFIG_HOME="$HOME/.config"
           export XDG_DATA_HOME="$HOME/.local/share"
@@ -100,27 +101,24 @@ jobs:
 
           mkdir -p "$XDG_CONFIG_HOME/nvim"
 
-          echo "==== Copy Neovim config ===="
+          echo "==== Copy config ===="
           rsync -a /work_dir/ "$XDG_CONFIG_HOME/nvim/" \
             --exclude ".git" \
             --exclude ".github" \
             --exclude "dist" \
-            --exclude "scripts/build-centos7.sh" \
-            --exclude "nvim-linux-x86_64*" \
+            --exclude "scripts" \
             --exclude "*.tar.gz"
 
-          echo "==== Install Lazy plugins ===="
+          echo "==== Install plugins ===="
           export NVIM_LAZY_NO_FILTER=1
           git config --global protocol.version 2
 
           nvim --headless "+Lazy! sync" +qa
-
-          echo "==== Build Tree-sitter parsers ===="
           nvim --headless "+TSUpdateSync" +qa || true
 
-          echo "==== Package bundle ===="
+          echo "==== Build bundle ===="
           OUT=/work_dir/dist
-          PKG="$OUT/lazynvim-centos7-bundle"
+          PKG=$OUT/lazynvim-centos7-bundle
 
           rm -rf "$OUT"
           mkdir -p "$PKG"
@@ -151,32 +149,27 @@ jobs:
           cd "$OUT"
           tar -czf lazynvim-centos7-bundle.tar.gz lazynvim-centos7-bundle
 
-          echo "==== DIST CONTENT ===="
+          echo "==== DIST ===="
           ls -lah "$OUT"
 
           test -f "$OUT/lazynvim-centos7-bundle.tar.gz"
 
-          echo "Build completed successfully."
+          echo "==== DONE ===="
           SCRIPT
 
-          chmod +x scripts/build-centos7.sh
+          chmod +x scripts/build.sh
 
-      - name: Build Full Package in CentOS7
+      - name: Run in CentOS7
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work_dir" \
             -w /work_dir \
             centos:7 \
-            /bin/bash /work_dir/scripts/build-centos7.sh
+            /bin/bash /work_dir/scripts/build.sh
 
       - name: Check dist
         run: |
-          echo "==== Workspace ===="
-          ls -lah
-
-          echo "==== Dist ===="
           ls -lah dist
-
           test -f dist/lazynvim-centos7-bundle.tar.gz
 
       - name: Upload Artifact
@@ -184,11 +177,9 @@ jobs:
         with:
           name: lazynvim-centos7-bundle
           path: dist/lazynvim-centos7-bundle.tar.gz
-          retention-days: 5
 
-      - name: Resolve Release Tag
+      - name: Resolve Tag
         id: tag
-        shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF_NAME}"
@@ -197,9 +188,7 @@ jobs:
           else
             TAG="manual-${GITHUB_RUN_NUMBER}"
           fi
-
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: ${TAG}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Upload Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
