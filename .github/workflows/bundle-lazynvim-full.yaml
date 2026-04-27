@@ -92,7 +92,7 @@ jobs:
           export PATH="/opt/nvim-linux-x86_64/bin:$PATH"
           nvim --version
 
-          echo "==== Setup XDG ===="
+          echo "==== Setup XDG (build-time only) ===="
           export HOME=/root
           export XDG_CONFIG_HOME="$HOME/.config"
           export XDG_DATA_HOME="$HOME/.local/share"
@@ -116,30 +116,46 @@ jobs:
           nvim --headless "+Lazy! sync" +qa
           nvim --headless "+TSUpdateSync" +qa || true
 
-          echo "==== Build bundle ===="
+          echo "==== Build bundle (portable, no /root pollution) ===="
           OUT=/work_dir/dist
           PKG=$OUT/lazynvim-centos7-bundle
 
           rm -rf "$OUT"
           mkdir -p "$PKG"
 
+          # nvim binary
           rsync -a /opt/nvim-linux-x86_64 "$PKG/"
 
-          mkdir -p "$PKG/root"
-          rsync -a "$HOME/.config" "$PKG/root/"
-          rsync -a "$HOME/.local"  "$PKG/root/"
-          rsync -a "$HOME/.cache"  "$PKG/root/" || true
+          # runtime data (仅作为默认模板，不强制使用)
+          mkdir -p "$PKG/template"
+          rsync -a "$HOME/.config" "$PKG/template/"
+          rsync -a "$HOME/.local"  "$PKG/template/"
+          rsync -a "$HOME/.cache"  "$PKG/template/" || true
 
+          # launcher（默认使用当前目录，不写 /root）
           cat > "$PKG/run-nvim.sh" <<'EOF'
           #!/usr/bin/env bash
-          DIR="$(cd "$(dirname "$0")" && pwd)"
+          set -e
 
-          export PATH="$DIR/nvim-linux-x86_64/bin:$PATH"
-          export HOME="$DIR/root"
-          export XDG_CONFIG_HOME="$HOME/.config"
-          export XDG_DATA_HOME="$HOME/.local/share"
-          export XDG_STATE_HOME="$HOME/.local/state"
-          export XDG_CACHE_HOME="$HOME/.cache"
+          BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          # 默认数据目录：当前目录下 .nvim-data
+          if [ -z "${NVIM_DATA_HOME:-}" ]; then
+            NVIM_DATA_HOME="$BASE_DIR/.nvim-data"
+          fi
+
+          export PATH="$BASE_DIR/nvim-linux-x86_64/bin:$PATH"
+          export XDG_CONFIG_HOME="$NVIM_DATA_HOME/.config"
+          export XDG_DATA_HOME="$NVIM_DATA_HOME/.local/share"
+          export XDG_STATE_HOME="$NVIM_DATA_HOME/.local/state"
+          export XDG_CACHE_HOME="$NVIM_DATA_HOME/.cache"
+
+          # 首次运行自动初始化（从 template 拷贝）
+          if [ ! -d "$XDG_CONFIG_HOME/nvim" ]; then
+            echo "[init] first run, initializing config to $NVIM_DATA_HOME"
+            mkdir -p "$NVIM_DATA_HOME"
+            cp -r "$BASE_DIR/template/." "$NVIM_DATA_HOME/"
+          fi
 
           exec nvim "$@"
           EOF
