@@ -1,4 +1,4 @@
-name: Build Neovim & Neovim-Qt (CentOS 7 EOL Optimized)
+name: Build Neovim & Neovim-Qt (CentOS 7 Fixed)
 on:
   workflow_dispatch:
 
@@ -8,21 +8,22 @@ jobs:
     container:
       image: centos:7
     steps:
-      - name: Fix CentOS 7 Repos (Vault Mirror)
+      - name: Fix CentOS 7 Repos (Vault All-in-One)
         run: |
-          # 1. 修复基础仓库指向 Vault 存档
-          sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/*.repo
-          sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/*.repo
-          sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/*.repo
+          # 1. 立即停止使用已经消失的 mirrorlist，并指向 vault 存档
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
 
-          # 2. 安装 SCL 和 EPEL
+          # 2. 安装 SCL 和 EPEL (安装后会生成新的 .repo 文件，需要再次修复)
           yum install -y centos-release-scl epel-release
 
-          # 3. 修复 SCL 仓库指向 Vault (核心修复)
-          find /etc/yum.repos.d/ -name "CentOS-SCLo*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
-          find /etc/yum.repos.d/ -name "CentOS-SCLo*.repo" -exec sed -i 's|^baseurl=http://mirror.centos.org/centos/7/sclo/|baseurl=http://vault.centos.org/centos/7/sclo/|g' {} +
+          # 3. 再次强制修复所有新生成的 repo 文件 (解决你图片中的 centos-sclo-rh 报错)
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
 
-          # 4. 安装工具链
+          # 4. 验证并安装工具链
           yum install -y --nogpgcheck devtoolset-11-gcc devtoolset-11-gcc-c++ \
                          make git patch unzip gettext-devel \
                          qt5-qtbase-devel qt5-qtsvg-devel \
@@ -37,11 +38,10 @@ jobs:
         shell: bash
         run: |
           source /opt/rh/devtoolset-11/enable
-          # 克隆 master 分支 (0.11 处于开发状态) 或指定 tag
           git clone --depth 1 https://github.com/neovim/neovim.git nvim-src
           
           cd nvim-src
-          # USE_BUNDLED=ON 极其重要：它会下载并静态编译所有依赖，避免链接 CentOS 7 过时的库
+          # 使用 USE_BUNDLED=ON 避免依赖系统的旧库
           make CMAKE_BUILD_TYPE=Release \
                CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist -DUSE_BUNDLED=ON" \
                LDFLAGS="-static-libstdc++ -static-libgcc"
@@ -64,11 +64,10 @@ jobs:
       - name: Create Bundle
         run: |
           cd $GITHUB_WORKSPACE
-          # 创建一个包含核心和 GUI 的压缩包
           tar -czvf nvim-centos7-x86_64.tar.gz -C nvim-dist .
 
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: nvim-centos7-static-linked
+          name: nvim-centos7-fixed
           path: nvim-centos7-x86_64.tar.gz
