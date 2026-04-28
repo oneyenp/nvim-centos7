@@ -1,44 +1,49 @@
-name: Build Neovim & Neovim-Qt for CentOS 7
+name: Build Neovim & Neovim-Qt (CentOS 7 EOL Optimized)
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
-  build-centos7:
+  build:
     runs-on: ubuntu-latest
     container:
-      image: centos:7 # 核心：确保 GLIBC 版本为 2.17
+      image: centos:7
     steps:
-      - name: Prepare CentOS 7 Environment
+      - name: Fix CentOS 7 Repos (Vault Mirror)
         run: |
-          # 1. 替换失效的镜像源 (CentOS 7 官方源已停止维护)
+          # 1. 修复基础仓库指向 Vault 存档
           sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/*.repo
           sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/*.repo
           sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/*.repo
-          
-          # 2. 安装基础构建工具
+
+          # 2. 安装 SCL 和 EPEL
           yum install -y centos-release-scl epel-release
-          yum install -y devtoolset-11-gcc devtoolset-11-gcc-c++ \
+
+          # 3. 修复 SCL 仓库指向 Vault (核心修复)
+          find /etc/yum.repos.d/ -name "CentOS-SCLo*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
+          find /etc/yum.repos.d/ -name "CentOS-SCLo*.repo" -exec sed -i 's|^baseurl=http://mirror.centos.org/centos/7/sclo/|baseurl=http://vault.centos.org/centos/7/sclo/|g' {} +
+
+          # 4. 安装工具链
+          yum install -y --nogpgcheck devtoolset-11-gcc devtoolset-11-gcc-c++ \
                          make git patch unzip gettext-devel \
                          qt5-qtbase-devel qt5-qtsvg-devel \
                          wget curl tar gzip
 
       - name: Install Modern CMake
         run: |
-          # Neovim 0.11 需要 3.10+ 的 CMake
           wget https://github.com/Kitware/CMake/releases/download/v3.26.4/cmake-3.26.4-linux-x86_64.sh
           sh cmake-3.26.4-linux-x86_64.sh --skip-license --prefix=/usr/local
 
-      - name: Build Neovim Core (0.11.x)
+      - name: Build Neovim Core (v0.11.x)
         shell: bash
         run: |
           source /opt/rh/devtoolset-11/enable
-          git clone --depth 1 --branch v0.10.4 https://github.com/neovim/neovim.git nvim-src
-          # 注：截至2024年中，0.11处于开发分支，如果需要特定tag请自行修改
+          # 克隆 master 分支 (0.11 处于开发状态) 或指定 tag
+          git clone --depth 1 https://github.com/neovim/neovim.git nvim-src
           
           cd nvim-src
-          # 编译所有内置依赖，并强制静态链接 C++ 库
-          make CMAKE_BUILD_TYPE=RelWithDebInfo \
-               CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist -DENABLE_JIT=ON" \
+          # USE_BUNDLED=ON 极其重要：它会下载并静态编译所有依赖，避免链接 CentOS 7 过时的库
+          make CMAKE_BUILD_TYPE=Release \
+               CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist -DUSE_BUNDLED=ON" \
                LDFLAGS="-static-libstdc++ -static-libgcc"
           make install
 
@@ -56,14 +61,14 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name: Package Binaries
+      - name: Create Bundle
         run: |
-          # 将 nvim-qt 移动到 nvim 的 bin 目录以便统一打包
           cd $GITHUB_WORKSPACE
+          # 创建一个包含核心和 GUI 的压缩包
           tar -czvf nvim-centos7-x86_64.tar.gz -C nvim-dist .
 
-      - name: Upload Artifact
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: nvim-centos7-bundle
+          name: nvim-centos7-static-linked
           path: nvim-centos7-x86_64.tar.gz
