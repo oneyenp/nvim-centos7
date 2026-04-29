@@ -10,32 +10,30 @@ jobs:
     steps:
       - name: Fix Repositories (Vault Migration)
         run: |
-          # 1. 禁用已失效的 mirrorlist 并强制指向 vault 存档服务器
+          # 1. 修复初始基础仓库地址
+          # 禁用所有 mirrorlist 并将 baseurl 指向 vault.centos.org
           sed -i 's|^mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-*.repo
           sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+          sed -i 's|^baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
           
-          # 针对 SCLO (Software Collections) 仓库的特殊修复
-          if [ -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo ]; then
-            sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-          fi
-          if [ -f /etc/yum.repos.d/CentOS-SCLo-scl.repo ]; then
-            sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-SCLo-scl.repo
-            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-SCLo-scl.repo
-          fi
-      
-          # 清理缓存并生成新缓存
-          sudo yum clean all
-          sudo yum makecache
-          # 2. 安装 SCL 和 EPEL (这一步会生成新的 .repo 文件)
+          yum clean all
+          yum makecache
+          
+          # 2. 安装 SCL 和 EPEL (这一步会生成新的 .repo 文件，这也是 image_b3f615.png 报错的原因)
           yum install -y centos-release-scl epel-release
           
-          # 3. 【核心修正】对所有新生成的 Repo（包含 SCL 和 EPEL）再次执行 Vault 迁移
+          # 3. 【核心修正】对所有新生成的 Repo（包含 SCL 和 EPEL）再次强制执行 Vault 迁移
+          # 使用 find 确保所有新安装的仓库配置文件（如 centos-sclo-sclo）都被修正
           find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' {} +
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|mirror.centos.org|vault.centos.org|g' {} +
           
+          # 特别修复 EPEL 仓库，指向其历史归档地址
+          find /etc/yum.repos.d/ -name "epel*.repo" -exec sed -i 's|^metalink=|#metalink=|g' {} +
+          find /etc/yum.repos.d/ -name "epel*.repo" -exec sed -i 's|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://archives.fedoraproject.org/pub/archive/epel/|g' {} +
+
           # 4. 验证并安装所需的工具链
+          yum clean all
+          yum makecache
           yum install -y --nogpgcheck devtoolset-11-gcc devtoolset-11-gcc-c++ \
                          make git patch unzip gettext-devel \
                          qt5-qtbase-devel qt5-qtsvg-devel \
@@ -43,7 +41,6 @@ jobs:
 
       - name: Install CMake 3.26
         run: |
-          # Neovim 0.11 需要高版本 CMake，CentOS 自带版本太低
           wget https://github.com/Kitware/CMake/releases/download/v3.26.4/cmake-3.26.4-linux-x86_64.sh
           sh cmake-3.26.4-linux-x86_64.sh --skip-license --prefix=/usr/local
 
@@ -51,11 +48,8 @@ jobs:
         shell: bash
         run: |
           source /opt/rh/devtoolset-11/enable
-          # 0.11 处于 master 分支，这里克隆最新的代码
           git clone --depth 1 https://github.com/neovim/neovim.git nvim-src
-          
           cd nvim-src
-          # USE_BUNDLED=ON 会自动下载并静态编译依赖，避免链接系统老旧库导致的符号错误
           make CMAKE_BUILD_TYPE=Release \
                CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist -DUSE_BUNDLED=ON" \
                LDFLAGS="-static-libstdc++ -static-libgcc"
@@ -78,7 +72,6 @@ jobs:
       - name: Create Tarball
         run: |
           cd $GITHUB_WORKSPACE
-          # 创建包含核心、运行时文件和 GUI 的压缩包
           tar -czvf nvim-0.11-centos7-x64.tar.gz -C nvim-dist .
 
       - name: Upload Artifact
