@@ -14,6 +14,19 @@ jobs:
           sed -i 's|^mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-*.repo
           sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
           
+          # 针对 SCLO (Software Collections) 仓库的特殊修复
+          if [ -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo ]; then
+            sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+          fi
+          if [ -f /etc/yum.repos.d/CentOS-SCLo-scl.repo ]; then
+            sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-SCLo-scl.repo
+            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-SCLo-scl.repo
+          fi
+      
+          # 清理缓存并生成新缓存
+          sudo yum clean all
+          sudo yum makecache
           # 2. 安装 SCL 和 EPEL (这一步会生成新的 .repo 文件)
           yum install -y centos-release-scl epel-release
           
