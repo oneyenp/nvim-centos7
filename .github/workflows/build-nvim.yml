@@ -1,81 +1,164 @@
-name: Build Neovim & Neovim-Qt (CentOS 7 Fix)
+name: Build Neovim & Neovim-Qt CentOS7
+
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-and-package:
     runs-on: ubuntu-latest
-    container:
-      image: centos:7
+
     steps:
-      - name: Fix Repositories (Vault Migration)
-        run: |
-          # 1. 修复初始基础仓库地址
-          # 禁用所有 mirrorlist 并将 baseurl 指向 vault.centos.org
-          sed -i 's|^mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-*.repo
-          sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
-          sed -i 's|^baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
-          
-          yum clean all
-          yum makecache
-          
-          # 2. 安装 SCL 和 EPEL (这一步会生成新的 .repo 文件，这也是 image_b3f615.png 报错的原因)
-          yum install -y centos-release-scl epel-release
-          
-          # 3. 【核心修正】对所有新生成的 Repo（包含 SCL 和 EPEL）再次强制执行 Vault 迁移
-          # 使用 find 确保所有新安装的仓库配置文件（如 centos-sclo-sclo）都被修正
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|^mirrorlist=|#mirrorlist=|g' {} +
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's|mirror.centos.org|vault.centos.org|g' {} +
-          
-          # 特别修复 EPEL 仓库，指向其历史归档地址
-          find /etc/yum.repos.d/ -name "epel*.repo" -exec sed -i 's|^metalink=|#metalink=|g' {} +
-          find /etc/yum.repos.d/ -name "epel*.repo" -exec sed -i 's|^#baseurl=http://download.fedoraproject.org/pub/epel/|baseurl=https://archives.fedoraproject.org/pub/archive/epel/|g' {} +
+      - name: Checkout
+        uses: actions/checkout@v4
 
-          # 4. 验证并安装所需的工具链
-          yum clean all
-          yum makecache
-          yum install -y --nogpgcheck devtoolset-11-gcc devtoolset-11-gcc-c++ \
-                         make git patch unzip gettext-devel \
-                         qt5-qtbase-devel qt5-qtsvg-devel \
-                         wget curl tar gzip
-
-      - name: Install CMake 3.26
+      - name: Build in CentOS 7
         run: |
-          wget https://github.com/Kitware/CMake/releases/download/v3.26.4/cmake-3.26.4-linux-x86_64.sh
-          sh cmake-3.26.4-linux-x86_64.sh --skip-license --prefix=/usr/local
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work_dir" \
+            -w /work_dir \
+            centos:7 \
+            /bin/bash -lc '
+              set -euo pipefail
 
-      - name: Build Neovim Core
-        shell: bash
-        run: |
-          source /opt/rh/devtoolset-11/enable
-          git clone --depth 1 https://github.com/neovim/neovim.git nvim-src
-          cd nvim-src
-          make CMAKE_BUILD_TYPE=Release \
-               CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist -DUSE_BUNDLED=ON" \
-               LDFLAGS="-static-libstdc++ -static-libgcc"
-          make install
+              export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+              export BUILD_ROOT=/work_dir
+              export INSTALL_ROOT=/work_dir/nvim-dist
+              export NVIM_VERSION=v0.11.7
+              export CMAKE_VERSION=3.26.4
 
-      - name: Build Neovim-Qt
-        shell: bash
-        run: |
-          source /opt/rh/devtoolset-11/enable
-          git clone --depth 1 https://github.com/equalsraf/neovim-qt.git
-          cd neovim-qt
-          mkdir build && cd build
-          /usr/local/bin/cmake -DCMAKE_BUILD_TYPE=Release \
-                 -DQT_QMAKE_EXECUTABLE=/usr/bin/qmake-qt5 \
-                 -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/nvim-dist \
-                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" ..
-          make -j$(nproc)
-          make install
+              echo "==== Fix CentOS 7 repos ===="
+              rm -f /etc/yum.repos.d/*.repo
 
-      - name: Create Tarball
-        run: |
-          cd $GITHUB_WORKSPACE
-          tar -czvf nvim-0.11-centos7-x64.tar.gz -C nvim-dist .
+              cat > /etc/yum.repos.d/CentOS-Vault.repo <<EOF
+          [base]
+          name=CentOS-7.9.2009 - Base
+          baseurl=http://vault.centos.org/7.9.2009/os/\$basearch/
+          enabled=1
+          gpgcheck=0
+
+          [updates]
+          name=CentOS-7.9.2009 - Updates
+          baseurl=http://vault.centos.org/7.9.2009/updates/\$basearch/
+          enabled=1
+          gpgcheck=0
+
+          [extras]
+          name=CentOS-7.9.2009 - Extras
+          baseurl=http://vault.centos.org/7.9.2009/extras/\$basearch/
+          enabled=1
+          gpgcheck=0
+
+          [sclo]
+          name=CentOS-7.9.2009 - SCLo
+          baseurl=http://vault.centos.org/7.9.2009/sclo/\$basearch/sclo/
+          enabled=1
+          gpgcheck=0
+
+          [sclo-rh]
+          name=CentOS-7.9.2009 - SCLo RH
+          baseurl=http://vault.centos.org/7.9.2009/sclo/\$basearch/rh/
+          enabled=1
+          gpgcheck=0
+
+          [epel]
+          name=EPEL 7 Archive
+          baseurl=https://archives.fedoraproject.org/pub/archive/epel/7/\$basearch/
+          enabled=1
+          gpgcheck=0
+          EOF
+
+              yum clean all
+              yum makecache -y
+
+              echo "==== Install build dependencies ===="
+              yum install -y --nogpgcheck \
+                devtoolset-11-gcc devtoolset-11-gcc-c++ \
+                make git patch unzip gettext-devel \
+                qt5-qtbase-devel qt5-qtsvg-devel \
+                wget curl tar gzip xz file which \
+                libtool automake autoconf pkgconfig
+
+              echo "==== Install CMake ${CMAKE_VERSION} ===="
+              wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh
+              sh cmake-${CMAKE_VERSION}-linux-x86_64.sh --skip-license --prefix=/usr/local
+              cmake --version
+
+              source /opt/rh/devtoolset-11/enable
+              gcc --version
+              g++ --version
+
+              rm -rf "${INSTALL_ROOT}" nvim-src neovim-qt
+              mkdir -p "${INSTALL_ROOT}"
+
+              echo "==== Build Neovim Core ${NVIM_VERSION} ===="
+              git clone --depth 1 --branch "${NVIM_VERSION}" https://github.com/neovim/neovim.git nvim-src
+              cd nvim-src
+
+              make -j"$(nproc)" \
+                CMAKE_BUILD_TYPE=Release \
+                CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=${INSTALL_ROOT} -DUSE_BUNDLED=ON" \
+                LDFLAGS="-static-libstdc++ -static-libgcc"
+
+              make install
+              cd "${BUILD_ROOT}"
+
+              echo "==== Build Neovim-Qt ===="
+              git clone --depth 1 https://github.com/equalsraf/neovim-qt.git
+              cd neovim-qt
+              mkdir -p build
+              cd build
+
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="${INSTALL_ROOT}" \
+                -DCMAKE_PREFIX_PATH="${INSTALL_ROOT}" \
+                -DQT_QMAKE_EXECUTABLE=/usr/bin/qmake-qt5 \
+                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+
+              make -j"$(nproc)"
+              make install
+              cd "${BUILD_ROOT}"
+
+              echo "==== Add install helper ===="
+              cat > "${INSTALL_ROOT}/install.sh" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          SRC_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+          DEFAULT_DIR="\$HOME/.local/nvim-centos7"
+
+          echo "Neovim CentOS7 portable package"
+          echo "Source: \$SRC_DIR"
+          read -rp "Install to [\$DEFAULT_DIR]: " TARGET_DIR
+          TARGET_DIR="\${TARGET_DIR:-\$DEFAULT_DIR}"
+
+          mkdir -p "\$TARGET_DIR"
+          cp -a "\$SRC_DIR"/. "\$TARGET_DIR"/
+
+          echo
+          echo "Installed to: \$TARGET_DIR"
+          echo "Add this to your shell rc:"
+          echo "  export PATH=\$TARGET_DIR/bin:\\\$PATH"
+          EOF
+
+              chmod +x "${INSTALL_ROOT}/install.sh"
+
+              echo "==== Smoke test ===="
+              "${INSTALL_ROOT}/bin/nvim" --version | head -20 || true
+              find "${INSTALL_ROOT}" -maxdepth 3 -type f | sort | head -100
+
+              echo "==== Create tarball ===="
+              tar -czf nvim-0.11.7-centos7-x64.tar.gz -C "${INSTALL_ROOT}" .
+
+              ls -lh nvim-0.11.7-centos7-x64.tar.gz
+            '
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nvim-centos7-package
-          path: nvim-0.11-centos7-x64.tar.gz
+          name: nvim-0.11.7-centos7-x64
+          path: nvim-0.11.7-centos7-x64.tar.gz
+          if-no-files-found: error
