@@ -81,14 +81,15 @@ jobs:
                 wget curl tar gzip xz file which \
                 libtool automake autoconf pkgconfig
 
-              echo "==== Install CMake ${CMAKE_VERSION} ===="
+              echo "==== Install CMake ===="
               wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh
               sh cmake-${CMAKE_VERSION}-linux-x86_64.sh --skip-license --prefix=/usr/local
-              cmake --version
 
               source /opt/rh/devtoolset-11/enable
-              gcc --version
-              g++ --version
+
+              export CFLAGS="-D_DEFAULT_SOURCE -D_BSD_SOURCE"
+              export CXXFLAGS="-D_DEFAULT_SOURCE -D_BSD_SOURCE"
+              export CPPFLAGS="-D_DEFAULT_SOURCE -D_BSD_SOURCE"
 
               rm -rf "${INSTALL_ROOT}" nvim-src neovim-qt
               mkdir -p "${INSTALL_ROOT}"
@@ -99,7 +100,7 @@ jobs:
 
               make -j"$(nproc)" \
                 CMAKE_BUILD_TYPE=Release \
-                CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=${INSTALL_ROOT} -DUSE_BUNDLED=ON" \
+                CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=${INSTALL_ROOT} -DUSE_BUNDLED=ON -DCMAKE_C_FLAGS=-D_DEFAULT_SOURCE\ -D_BSD_SOURCE -DCMAKE_CXX_FLAGS=-D_DEFAULT_SOURCE\ -D_BSD_SOURCE" \
                 LDFLAGS="-static-libstdc++ -static-libgcc"
 
               make install
@@ -116,6 +117,8 @@ jobs:
                 -DCMAKE_INSTALL_PREFIX="${INSTALL_ROOT}" \
                 -DCMAKE_PREFIX_PATH="${INSTALL_ROOT}" \
                 -DQT_QMAKE_EXECUTABLE=/usr/bin/qmake-qt5 \
+                -DCMAKE_C_FLAGS="-D_DEFAULT_SOURCE -D_BSD_SOURCE" \
+                -DCMAKE_CXX_FLAGS="-D_DEFAULT_SOURCE -D_BSD_SOURCE" \
                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
               make -j"$(nproc)"
@@ -148,7 +151,6 @@ jobs:
 
               echo "==== Smoke test ===="
               "${INSTALL_ROOT}/bin/nvim" --version | head -20 || true
-              find "${INSTALL_ROOT}" -maxdepth 3 -type f | sort | head -100
 
               echo "==== Create tarball ===="
               tar -czf nvim-0.11.7-centos7-x64.tar.gz -C "${INSTALL_ROOT}" .
