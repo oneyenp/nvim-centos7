@@ -14,13 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build in CentOS 7
+      - name: Generate CentOS7 build script
         run: |
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}:/work_dir" \
-            -w /work_dir \
-            centos:7 \
-            /bin/bash -s <<'CENTOS_SCRIPT'
+          cat > build-centos7.sh <<'SCRIPT_EOF'
+          #!/usr/bin/env bash
           set -euo pipefail
 
           export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -28,6 +25,8 @@ jobs:
           export INSTALL_ROOT=/work_dir/nvim-dist
           export NVIM_VERSION=v0.11.7
           export CMAKE_VERSION=3.26.4
+
+          cd "${BUILD_ROOT}"
 
           echo "==== Fix CentOS 7 repos ===="
           rm -f /etc/yum.repos.d/*.repo
@@ -109,6 +108,7 @@ jobs:
           echo "==== Build Neovim-Qt Qt5 ===="
           git clone --depth 1 --branch v0.2.18 https://github.com/equalsraf/neovim-qt.git
           cd neovim-qt
+
           mkdir -p build
           cd build
 
@@ -151,9 +151,19 @@ jobs:
           "${INSTALL_ROOT}/bin/nvim" --version | head -10 || true
 
           echo "==== Packaging ===="
-          tar -czf nvim-0.11.7-centos7-x64.tar.gz -C "${INSTALL_ROOT}" .
-          ls -lh nvim-0.11.7-centos7-x64.tar.gz
-          CENTOS_SCRIPT
+          tar -czf /work_dir/nvim-0.11.7-centos7-x64.tar.gz -C "${INSTALL_ROOT}" .
+          ls -lh /work_dir/nvim-0.11.7-centos7-x64.tar.gz
+          SCRIPT_EOF
+
+          chmod +x build-centos7.sh
+
+      - name: Build in CentOS 7
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work_dir" \
+            -w /work_dir \
+            centos:7 \
+            /bin/bash /work_dir/build-centos7.sh
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
